@@ -62,6 +62,32 @@ docker compose up --build
 
 查询参数：`device_id`（可选）、`status=current|stale|all`（默认 current）。
 
+### 更正影响 `GET /correction-impact`
+
+按来源编号与修订号查询一次**更正**对已发布区间的影响（仅受理修订前后仍属
+**同一设备**的更正；读数与交接来源均可查）：
+
+```
+GET /correction-impact?source_id=S2&revision=2            # kind 自动识别
+GET /correction-impact?source_id=H1&revision=2&kind=handover
+```
+
+- 受理前实际可供数的区间与此次重建已发布的区间都以**冻结快照**保存，后续重建
+  不会改写本次更正的答复；答复仅列时段、电量、可判定状态（`undeterminable`/
+  `reason`）或来源（两端读数/交接的来源编号与修订号）有变化的区间，两侧完整
+  快照同时附在 `baseline_intervals` / `published_intervals`。
+- 区间边界变化时不做配对，分别以 `change_type=removed`（旧结果）和 `added`
+  （新结果）给出，**不臆算差额**；边界不变且内容有变才记为 `modified`。
+- 受理前该设备已无 current 供数（旧区间已待重建）：`baseline_available=false`、
+  `comparison_possible=false`，不做比较，只在重建成功后交付新区间。
+- 此次重建失败：`state=pending`，只报待重建与 `failure_reason`，不发布新区间；
+  重试成功后才转为 `published` 并交付。
+- 待重建期间该设备又受理其他数据：事件转 `state=superseded`，后续重建结果一律
+  不计入此次更正（以受理序号 `submissions.id` 判定）。
+- 错误语义：来源/修订号未受理 → 404；同编号同时存在于读数与交接且未带 `kind`
+  → 409（需 `kind` 消歧）；修订 1（原始提交而非更正）或更正把来源移到另一设备
+  → 422。原有供数与修订流程不受影响。
+
 ## 迟到数据与重建的一致性保证
 
 1. 读数/交接一旦**受理**，受影响设备的全部 `current` 区间在同一事务内立即
@@ -90,7 +116,8 @@ pytest -q
 
 ```
 app/            FastAPI 应用（models/database/service/main）
-tests/          17 项端到端自测（TestClient + 临时 SQLite 文件）
+tests/          端到端自测（TestClient + 临时 SQLite 文件）：
+                test_api.py 17 项 + test_correction_impact.py 15 项
 Dockerfile      python:3.11-slim 镜像，含 /health 健康检查
 docker-compose.yml
 ```

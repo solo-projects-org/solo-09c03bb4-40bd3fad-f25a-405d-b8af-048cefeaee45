@@ -13,8 +13,21 @@ from fastapi.responses import JSONResponse
 
 from .config import Settings
 from .database import ConnectionPool
-from .errors import ConflictError, RebuildFailure
-from .models import AcceptOut, HandoverIn, IntervalOut, ReadingIn, RebuildOut
+from .errors import (
+    ConflictError,
+    ImpactAmbiguous,
+    ImpactNotFound,
+    ImpactNotEligible,
+    RebuildFailure,
+)
+from .models import (
+    AcceptOut,
+    CorrectionImpactOut,
+    HandoverIn,
+    IntervalOut,
+    ReadingIn,
+    RebuildOut,
+)
 from . import service
 
 
@@ -46,6 +59,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.exception_handler(ConflictError)
     async def conflict_handler(request: Request, exc: ConflictError):
+        return JSONResponse(status_code=409, content={"detail": exc.detail})
+
+    @app.exception_handler(ImpactNotFound)
+    async def impact_not_found_handler(request: Request, exc: ImpactNotFound):
+        return JSONResponse(status_code=404, content={"detail": exc.detail})
+
+    @app.exception_handler(ImpactNotEligible)
+    async def impact_not_eligible_handler(request: Request, exc: ImpactNotEligible):
+        return JSONResponse(status_code=422, content={"detail": exc.detail})
+
+    @app.exception_handler(ImpactAmbiguous)
+    async def impact_ambiguous_handler(request: Request, exc: ImpactAmbiguous):
         return JSONResponse(status_code=409, content={"detail": exc.detail})
 
     @app.get("/health", tags=["运维"])
@@ -141,6 +166,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             }
             for r in rows
         ]
+
+    @app.get(
+        "/correction-impact",
+        response_model=CorrectionImpactOut,
+        tags=["更正影响"],
+        summary="按来源编号与修订号查询一次更正对已发布区间的影响",
+    )
+    def get_correction_impact(
+        source_id: str = Query(..., min_length=1, description="来源编号"),
+        revision: int = Query(..., ge=1, description="修订号（必须是已受理的更正修订）"),
+        kind: str | None = Query(
+            default=None,
+            pattern="^(reading|handover)$",
+            description="来源类型；同编号同时存在于读数与交接时必填以消歧",
+        ),
+        conn: sqlite3.Connection = Depends(db),
+    ):
+        """只服务于修订前后仍属同一设备的更正。
+
+        对照受理前实际可供数的区间快照与此次重建发布的区间快照，仅返回时段、
+        电量、可判定状态或来源有变化的区间，并同时给出两侧完整快照。区间边界
+        变化时以 removed/added 分别给出旧、新结果，不臆算差额。受理前旧区间
+        已待重建（无 current 供数）时 baseline_available=false，不做比较；
+        重建未成功只报 pending，重试成功后才发布新区间；期间该设备又受理其他
+        数据则标记 superseded，后续结果不计入此次更正。
+        """
+        return service.get_correction_impact(conn, source_id, revision, kind)
 
     @app.get("/rebuild-runs", tags=["运维"])
     def get_rebuild_runs(conn: sqlite3.Connection = Depends(db)):

@@ -97,3 +97,61 @@ class RebuildOut(BaseModel):
     rebuilt_devices: list[str]
     failed_devices: dict[str, str]
     detail: str | None = None
+
+
+class ImpactInterval(BaseModel):
+    """Frozen view of one interval as stored on either side of a correction."""
+
+    device_id: str
+    start_ts: str
+    end_ts: str
+    start_meter_no: str
+    end_meter_no: str
+    energy_kwh: float | None
+    undeterminable: bool
+    reason: str | None
+    start_source_id: str
+    start_revision: int
+    end_source_id: str
+    end_revision: int
+    handover_source_id: str | None
+    handover_revision: int | None
+
+
+class ImpactChange(BaseModel):
+    """One changed interval.
+
+    When the interval exists on both sides with identical time bounds, both
+    ``before`` and ``after`` are populated and ``change_type`` is ``modified``.
+    When the correction moves interval boundaries, the old result is returned
+    separately (``removed``) from the new result (``added``); no difference
+    amount is ever invented for those.
+    """
+
+    change_type: str  # modified | added | removed
+    before: ImpactInterval | None = None
+    after: ImpactInterval | None = None
+
+
+class CorrectionImpactOut(BaseModel):
+    source_id: str
+    revision: int
+    kind: str
+    device_id: str
+    # pending: the rebuild triggered by the correction has not delivered yet
+    # published: new intervals were delivered by this correction's rebuild
+    # superseded: another submission for the device was accepted in the meantime
+    state: str
+    # False when the device had no current-supply intervals at acceptance
+    # (its old intervals were already stale / pending rebuild): no before/after
+    # comparison is possible.
+    baseline_available: bool
+    comparison_possible: bool
+    changes: list[ImpactChange] = []
+    # Full snapshots attached on both sides, including the unchanged intervals.
+    baseline_intervals: list[ImpactInterval] = []
+    published_intervals: list[ImpactInterval] = []
+    trigger_run_id: int | None = None
+    published_run_id: int | None = None
+    failure_reason: str | None = None
+    note: str | None = None

@@ -90,6 +90,52 @@ CREATE TABLE IF NOT EXISTS rebuild_runs (
     started_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     finished_at TEXT
 );
+
+-- One row per *accepted* (non-idempotent) submission, together with every
+-- device whose current-supply eligibility it revoked.  The acceptance id is a
+-- monotonic counter that lets the correction-impact feature tell whether any
+-- *other* submission for the same device was accepted in the meantime.
+CREATE TABLE IF NOT EXISTS submissions (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind             TEXT NOT NULL CHECK (kind IN ('reading','handover')),
+    source_id        TEXT NOT NULL,
+    revision         INTEGER NOT NULL,
+    device_id        TEXT NOT NULL,
+    affected_devices TEXT NOT NULL,       -- JSON array of device ids
+    accepted_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_submissions_lookup
+    ON submissions(kind, source_id, revision);
+
+-- Correction-impact tracking.  A row exists only for revisions whose previous
+-- revision points at the SAME device (the API deliberately does not handle
+-- corrections that move a source to another device).  Baseline intervals
+-- (what was actually servable immediately before acceptance) and the intervals
+-- published by this correction's rebuild are frozen as JSON snapshots, so a
+-- later rebuild can never rewrite the answer for this correction.
+CREATE TABLE IF NOT EXISTS correction_events (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind               TEXT NOT NULL CHECK (kind IN ('reading','handover')),
+    source_id          TEXT NOT NULL,
+    revision           INTEGER NOT NULL,
+    device_id          TEXT NOT NULL,
+    submission_id      INTEGER NOT NULL,
+    baseline_available INTEGER NOT NULL,    -- 0: device had no current supply at acceptance
+    baseline_snapshot  TEXT,                -- JSON array, NULL when baseline unavailable
+    -- pending   : rebuild triggered by this correction has not succeeded yet
+    -- published : the triggered (or retried) rebuild delivered new intervals
+    -- superseded: another submission for this device was accepted first
+    state              TEXT NOT NULL CHECK (state IN ('pending','published','superseded')),
+    trigger_run_id     INTEGER,             -- rebuild_runs.id of the auto-rebuild
+    published_run_id   INTEGER,             -- rebuild_runs.id that delivered the snapshot
+    published_snapshot TEXT,                -- JSON array of new current intervals
+    failure_reason     TEXT,                -- last known rebuild failure (state stays pending)
+    created_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    UNIQUE(kind, source_id, revision)
+);
+CREATE INDEX IF NOT EXISTS idx_correction_device
+    ON correction_events(device_id, state);
 """
 
 

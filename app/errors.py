@@ -16,3 +16,27 @@ class RebuildFailure(Exception):
         self.device_id = device_id
         self.reason = reason
         super().__init__(f"rebuild failed for device {device_id}: {reason}")
+
+
+class ImpactNotFound(Exception):
+    """404: no accepted submission matches the given kind/source_id/revision."""
+
+    def __init__(self, detail: str):
+        self.detail = detail
+        super().__init__(detail)
+
+
+class ImpactNotEligible(Exception):
+    """422: the submission exists but is not a same-device correction."""
+
+    def __init__(self, detail: str):
+        self.detail = detail
+        super().__init__(detail)
+
+
+class ImpactAmbiguous(Exception):
+    """409: source_id/revision matches more than one kind; caller must disambiguate."""
+
+    def __init__(self, detail: str):
+        self.detail = detail
+        super().__init__(detail)
